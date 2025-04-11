@@ -88,43 +88,46 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         // TODO: Add your strings here IN LOWERCASE!
         std::vector<std::string> searchStrings = { "powershell", "mshta", "cmd" };
 
+        bool bHadSuspiciousString = false;
+        bool bHadVirus = false;
+
         for (const auto& searchString : searchStrings) {
             if (lowerClipboardText.find(searchString) != std::string::npos) {
-                std::string alertMessage = "Suspicious content from the Internet was found on the clipboard!\n\n" + clipboardText;
-                OutputDebugStringA(alertMessage.c_str());
-                std::thread(ShowMessageBoxOnThread, hwnd, alertMessage).detach(); // Start MessageBox on a new thread
+                bHadSuspiciousString = true;
+                break;
+            }
+        }
 
-                // AMSI Scan
-                if (hAmsiContext != nullptr && hAmsiSession != nullptr) {
-                    AMSI_RESULT amsiResult;
-                    std::wstring wideClipboardText = NarrowStringToWide(clipboardText); // Convert to wide string
+        if (bHadSuspiciousString) {
+            OutputDebugStringA("ClipShieldAMSIScanner found a suspicious web-originating string on the clipboard. Calling AV...");
+            std::string avScanResultText = "";
+            if (hAmsiContext != nullptr && hAmsiSession != nullptr) {
+                AMSI_RESULT amsiResult;
+                std::wstring wideClipboardText = NarrowStringToWide(clipboardText);
 
-                    HRESULT hr = AmsiScanString(hAmsiContext, wideClipboardText.c_str(), L"BrowserClipboardData", hAmsiSession, &amsiResult);
-                    if (SUCCEEDED(hr)) {
-                        if (amsiResult == AMSI_RESULT_DETECTED) {
-                            OutputDebugStringA("ClipShieldAMSIScanner AMSI Detected Malicious Content\n");
-                            std::string alertDetectedMessage = "ClipShieldAMSIScanner - AMSI detected malicious content on the clipboard.";
-                            std::thread(ShowMessageBoxOnThread, hwnd, alertDetectedMessage).detach();
-                            break;
-                        }
-                        else if (amsiResult == AMSI_RESULT_NOT_DETECTED) {
-                            OutputDebugStringA("ClipShieldAMSIScanner AMSI Scan - No malicious content detected\n");
-                        }
-                        else {
-                            OutputDebugStringA("ClipShieldAMSIScanner AMSI Scan - Unknown result\n");
-                        }
+                HRESULT hr = AmsiScanString(hAmsiContext, wideClipboardText.c_str(), L"BrowserClipboardData", hAmsiSession, &amsiResult);
+                if (SUCCEEDED(hr)) {
+                    if (amsiResult == AMSI_RESULT_DETECTED) {
+                        OutputDebugStringA("ClipShieldAMSIScanner AMSI Detected Malicious Content\n");
+                        avScanResultText = "\n\n^^^ AMSI believes this content is malicious ^^^";
+                        bHadVirus = true;
+                    }
+                    else if (amsiResult == AMSI_RESULT_NOT_DETECTED) {
+                        avScanResultText = "\n\n AMSI Scan - No malicious content detected, but use caution when pasting anyway.";
                     }
                     else {
-                        OutputDebugStringA("ClipShieldAMSIScanner AMSI Scan failed\n");
+                        avScanResultText = "\n\n AMSI Scan was inconclusive. Use caution when pasting.";
                     }
                 }
                 else {
-                    OutputDebugStringA("ClipShieldAMSIScanner AMSI Context or Session is null\n");
+                    OutputDebugStringA("ClipShieldAMSIScanner AMSI Scan failed\n");
                 }
-
-                ClearClipboard();
-                break;
             }
+
+            std::string alertMessage = "Suspicious content from the Internet was found on the clipboard!\n\n" + clipboardText + avScanResultText;
+            OutputDebugStringA(alertMessage.c_str());
+            std::thread(ShowMessageBoxOnThread, hwnd, alertMessage).detach();
+            if (bHadVirus) ClearClipboard();
         }
         break;
     }
