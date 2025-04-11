@@ -111,6 +111,15 @@ int WINAPI WinMain(
     _In_ int nCmdShow) {
     const wchar_t CLASS_NAME[] = L"ClipboardListenerClass";
 
+    HANDLE hSingleInstanceMutex = CreateMutex(nullptr, TRUE, L"ClipShieldSingleInstanceMutex");
+    if (hSingleInstanceMutex == nullptr) return 2;
+
+    // Another instance is already running
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        CloseHandle(hSingleInstanceMutex);
+        return 3;
+    }
+
     WNDCLASS wc = {};
     wc.lpfnWndProc = WndProc;
     wc.hInstance = hInstance;
@@ -121,6 +130,7 @@ int WINAPI WinMain(
     HWND hwnd = CreateWindowEx(0, CLASS_NAME, L"ClipShield Listener", WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT, 320, 240, nullptr, nullptr, hInstance, nullptr);
     if (hwnd == nullptr) {
+        CloseHandle(hSingleInstanceMutex);
         return -1;
     }
 
@@ -135,5 +145,8 @@ int WINAPI WinMain(
     }
 
     RemoveClipboardFormatListener(hwnd);
+
+    ReleaseMutex(hSingleInstanceMutex);
+    CloseHandle(hSingleInstanceMutex);
     return 0;
 }
