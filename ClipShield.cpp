@@ -6,10 +6,14 @@
 #include <vector>
 #include <algorithm>
 #include <thread>
+#include <amsi.h>
 
 UINT chromiumFormat = RegisterClipboardFormat(L"Chromium internal source URL");
 UINT mozillaFormat = RegisterClipboardFormat(L"text/x-moz-url-priv");
 UINT ieFormat = RegisterClipboardFormat(L"msSourceUrl");
+
+HAMSICONTEXT hAmsiContext = nullptr;
+HAMSISESSION hAmsiSession = nullptr;
 
 std::string WideStringToNarrow(const std::wstring& wide) {
     if (wide.empty()) return std::string();
@@ -82,13 +86,42 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         std::string clipboardText = GetClipboardText();
         std::string lowerClipboardText = toLower(clipboardText);
         // TODO: Add your strings here IN LOWERCASE!
-        std::vector<std::string> searchStrings = { "powershell", "mshta", "cmd.exe" };
+        std::vector<std::string> searchStrings = { "powershell", "mshta", "cmd" };
 
         for (const auto& searchString : searchStrings) {
             if (lowerClipboardText.find(searchString) != std::string::npos) {
                 std::string alertMessage = "Suspicious content from the Internet was found on the clipboard!\n\n" + clipboardText;
                 OutputDebugStringA(alertMessage.c_str());
                 std::thread(ShowMessageBoxOnThread, hwnd, alertMessage).detach(); // Start MessageBox on a new thread
+
+                // AMSI Scan
+                if (hAmsiContext != nullptr && hAmsiSession != nullptr) {
+                    AMSI_RESULT amsiResult;
+                    std::wstring wideClipboardText = NarrowStringToWide(clipboardText); // Convert to wide string
+
+                    HRESULT hr = AmsiScanString(hAmsiContext, wideClipboardText.c_str(), L"BrowserClipboardData", hAmsiSession, &amsiResult);
+                    if (SUCCEEDED(hr)) {
+                        if (amsiResult == AMSI_RESULT_DETECTED) {
+                            OutputDebugStringA("ClipShieldAMSIScanner AMSI Detected Malicious Content\n");
+                            std::string alertDetectedMessage = "ClipShieldAMSIScanner - AMSI detected malicious content on the clipboard.";
+                            std::thread(ShowMessageBoxOnThread, hwnd, alertDetectedMessage).detach();
+                            break;
+                        }
+                        else if (amsiResult == AMSI_RESULT_NOT_DETECTED) {
+                            OutputDebugStringA("ClipShieldAMSIScanner AMSI Scan - No malicious content detected\n");
+                        }
+                        else {
+                            OutputDebugStringA("ClipShieldAMSIScanner AMSI Scan - Unknown result\n");
+                        }
+                    }
+                    else {
+                        OutputDebugStringA("ClipShieldAMSIScanner AMSI Scan failed\n");
+                    }
+                }
+                else {
+                    OutputDebugStringA("ClipShieldAMSIScanner AMSI Context or Session is null\n");
+                }
+
                 ClearClipboard();
                 break;
             }
@@ -134,6 +167,24 @@ int WINAPI WinMain(
         return -1;
     }
 
+    // Initialize AMSI
+    HRESULT hr;
+
+    hr = AmsiInitialize(L"ClipShieldAMSIScanner", &hAmsiContext);
+    if (FAILED(hr)) {
+        OutputDebugStringA("AMSI Initialization Failed\n");
+        // Handle AMSI initialization failure (e.g., show a message box)
+    }
+    else {
+        hr = AmsiOpenSession(hAmsiContext, &hAmsiSession);
+        if (FAILED(hr)) {
+            OutputDebugStringA("ClipShieldAMSIScanner AMSI Session Failed\n");
+            AmsiUninitialize(hAmsiContext);
+            hAmsiContext = nullptr;
+        }
+        else OutputDebugStringA("ClipShieldAMSIScanner AMSI Session Created\n");
+    }
+
     // Register for notification of clipboard changes.
     AddClipboardFormatListener(hwnd);
 
@@ -145,6 +196,14 @@ int WINAPI WinMain(
     }
 
     RemoveClipboardFormatListener(hwnd);
+
+    // Uninitialize AMSI
+    if (hAmsiSession != nullptr && hAmsiContext != nullptr) {
+        AmsiCloseSession(hAmsiContext, hAmsiSession);
+    }
+    if (hAmsiContext != nullptr) {
+        AmsiUninitialize(hAmsiContext);
+    }
 
     ReleaseMutex(hSingleInstanceMutex);
     CloseHandle(hSingleInstanceMutex);
