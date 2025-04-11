@@ -109,14 +109,14 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 if (SUCCEEDED(hr)) {
                     if (amsiResult == AMSI_RESULT_DETECTED) {
                         OutputDebugStringA("ClipShieldAMSIScanner AMSI Detected Malicious Content\n");
-                        avScanResultText = "\n\n^^^ AMSI believes this content is malicious ^^^";
+                        avScanResultText = "\n\n^^^ AV Scan indicates that this content is malicious, wiping it. ^^^";
                         bHadVirus = true;
                     }
                     else if (amsiResult == AMSI_RESULT_NOT_DETECTED) {
-                        avScanResultText = "\n\n AMSI Scan - No malicious content detected, but use caution when pasting anyway.";
+                        avScanResultText = "\n\nNo malicious content detected, but use caution when pasting anyway.";
                     }
                     else {
-                        avScanResultText = "\n\n AMSI Scan was inconclusive. Use caution when pasting.";
+                        avScanResultText = "\n\nAV Scan was inconclusive. Use caution when pasting.";
                     }
                 }
                 else {
