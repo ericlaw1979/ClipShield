@@ -7,10 +7,14 @@
 #include <algorithm>
 #include <thread>
 #include <amsi.h>
+#include <chrono>
 
 UINT chromiumFormat = RegisterClipboardFormat(L"Chromium internal source URL");
 UINT mozillaFormat = RegisterClipboardFormat(L"text/x-moz-url-priv");
 UINT ieFormat = RegisterClipboardFormat(L"msSourceUrl");
+std::chrono::system_clock::time_point lastClipboardUpdate = std::chrono::system_clock::now();
+HHOOK hKeyboardHook = nullptr;
+bool bClipboardContentSuspicious = false;
 
 HAMSICONTEXT hAmsiContext = nullptr;
 HAMSISESSION hAmsiSession = nullptr;
@@ -68,44 +72,100 @@ void ClearClipboard() {
     }
 }
 
+/// <summary>
+/// If the clipboard contents came from a web surface, return the content's URL.
+/// </summary>
+/// <returns>An empty string if the content isn't from a web surface, a URL if it did, or "about:internet" if the URL could not be read.</returns>
+std::string GetAnySourceURL() {
+    if (!IsClipboardFormatAvailable(chromiumFormat) && !IsClipboardFormatAvailable(mozillaFormat) && !IsClipboardFormatAvailable(ieFormat)) return "";
+
+    if (!OpenClipboard(nullptr)) return "about:internet";
+
+    HANDLE hClipboardData = GetClipboardData(chromiumFormat);
+    if (hClipboardData == nullptr) {
+        hClipboardData = GetClipboardData(mozillaFormat);
+        if (hClipboardData == nullptr) {
+            hClipboardData = GetClipboardData(ieFormat);
+            if (hClipboardData == nullptr) {
+                CloseClipboard();
+                return "about:internet";
+            }
+        }
+    }
+    char* pchData = (char*)GlobalLock(hClipboardData);
+    if (pchData == nullptr) {
+        CloseClipboard();
+        return "about:internet";
+    }
+    std::string text = pchData;
+    GlobalUnlock(hClipboardData);
+    CloseClipboard();
+    return text;
+}
+
 void ShowMessageBoxOnThread(HWND hwnd, std::string message) {
     MessageBoxA(hwnd, message.c_str(), "DANGER!", MB_OK | MB_SYSTEMMODAL | MB_SETFOREGROUND | MB_ICONWARNING);
+}
+
+LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
+    if (nCode == HC_ACTION) {
+        PKBDLLHOOKSTRUCT pKeyStruct = (PKBDLLHOOKSTRUCT)lParam;
+        if (wParam == WM_KEYDOWN) {
+            PKBDLLHOOKSTRUCT pKeyStruct = (PKBDLLHOOKSTRUCT)lParam;
+            if (pKeyStruct->vkCode == 'R') {
+                if (GetAsyncKeyState(VK_LWIN) & 0x8000) {
+                    std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
+                    std::chrono::seconds diff = std::chrono::duration_cast<std::chrono::seconds>(now - lastClipboardUpdate);
+                    if (diff.count() <= 30) {
+                        std::string alertMessage = "Pasting web content into the Run dialog is dangerous and could "
+                                                   "result in attackers taking over your computer. Use extreme caution.";
+                        std::thread(ShowMessageBoxOnThread, nullptr, alertMessage).detach();
+                    }
+                }
+            }
+        }
+    }
+    return CallNextHookEx(hKeyboardHook, nCode, wParam, lParam);
 }
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
     case WM_CLIPBOARDUPDATE: {
+        lastClipboardUpdate = std::chrono::system_clock::now();
+        bClipboardContentSuspicious = false;
+
         // If the clipboard content was not added by a web platform, let it go.
-        if (!IsClipboardFormatAvailable(chromiumFormat) &&
-            !IsClipboardFormatAvailable(mozillaFormat) &&
-            !IsClipboardFormatAvailable(ieFormat))
-        {
-            return 0;
-        }
+        std::string sURL = GetAnySourceURL();
+        if (sURL.empty()) return 0;
 
         std::string clipboardText = GetClipboardText();
         std::string lowerClipboardText = toLower(clipboardText);
-        // TODO: Add your strings here IN LOWERCASE!
+
+        // TODO: Add your first filter strings here IN LOWERCASE!
         std::vector<std::string> searchStrings = { "powershell", "mshta", "cmd" };
 
-        bool bHadSuspiciousString = false;
         bool bHadVirus = false;
 
         for (const auto& searchString : searchStrings) {
             if (lowerClipboardText.find(searchString) != std::string::npos) {
-                bHadSuspiciousString = true;
+                bClipboardContentSuspicious = true;
                 break;
             }
         }
 
-        if (bHadSuspiciousString) {
+        if (bClipboardContentSuspicious) {
             OutputDebugStringA("ClipShieldAMSIScanner found a suspicious web-originating string on the clipboard. Calling AV...");
             std::string avScanResultText = "";
             if (hAmsiContext != nullptr && hAmsiSession != nullptr) {
                 AMSI_RESULT amsiResult;
                 std::wstring wideClipboardText = NarrowStringToWide(clipboardText);
+                std::wstring contentName = L"Clipboard Data from " + NarrowStringToWide(sURL);
+                HRESULT hr = AmsiScanString(hAmsiContext, wideClipboardText.c_str(), contentName.c_str(), hAmsiSession, &amsiResult);
 
-                HRESULT hr = AmsiScanString(hAmsiContext, wideClipboardText.c_str(), L"BrowserClipboardData", hAmsiSession, &amsiResult);
+                std::wstringstream ss;
+                ss << L"ClipShieldAMSIScanner AMSI Scan String" << std::endl << contentName.c_str() << std::endl << L"HRESULT: 0x" << std::hex << hr << std::endl;
+                OutputDebugStringW(ss.str().c_str());
+
                 if (SUCCEEDED(hr)) {
                     if (amsiResult == AMSI_RESULT_DETECTED) {
                         OutputDebugStringA("ClipShieldAMSIScanner AMSI Detected Malicious Content\n");
@@ -127,7 +187,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             std::string alertMessage = "Suspicious content from the Internet was found on the clipboard!\n\n" + clipboardText + avScanResultText;
             OutputDebugStringA(alertMessage.c_str());
             std::thread(ShowMessageBoxOnThread, hwnd, alertMessage).detach();
-            if (bHadVirus) ClearClipboard();
+            if (bHadVirus) {
+                bClipboardContentSuspicious = false;
+                ClearClipboard();
+            }
         }
         break;
     }
@@ -170,6 +233,11 @@ int WINAPI WinMain(
         return -1;
     }
 
+    hKeyboardHook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardProc, hInstance, 0);
+    if (hKeyboardHook == nullptr) {
+        OutputDebugStringA("ClipShield: Failed to set keyboard hook.");
+    }
+
     // Initialize AMSI
     HRESULT hr;
 
@@ -199,6 +267,8 @@ int WINAPI WinMain(
     }
 
     RemoveClipboardFormatListener(hwnd);
+
+    if (hKeyboardHook != nullptr) UnhookWindowsHookEx(hKeyboardHook);
 
     // Uninitialize AMSI
     if (hAmsiSession != nullptr && hAmsiContext != nullptr) {
