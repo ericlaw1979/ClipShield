@@ -1,4 +1,4 @@
-// Note: Most of this was written by GPT.
+// https://textslashplain.com/2025/04/15/vibe-coding-for-security/
 #include <iostream>
 #include <windows.h>
 #include <string>
