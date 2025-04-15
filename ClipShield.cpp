@@ -64,7 +64,7 @@ std::string GetClipboardText() {
     return text;
 }
 
-void SetClipboardText(const std::string& text) {
+void ReplaceClipboardWithText(const std::string& text) {
     if (OpenClipboard(nullptr)) {
         EmptyClipboard();
         HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, (text.size() + 1) * sizeof(wchar_t));
@@ -208,8 +208,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             std::thread(ShowMessageBoxOnThread, hwnd, alertMessage).detach();
             if (bHadVirus) {
                 bClipboardContentSuspicious = false;
-                ClearClipboard();
-                SetClipboardText("ClipShield: Dangerous web content was removed from the clipboard.");
+                ReplaceClipboardWithText("ClipShield: Dangerous web content was removed from the clipboard.");
             }
         }
         break;
