@@ -41,7 +41,6 @@ std::string toLower(std::string str) {
     return result;
 }
 
-// Function to get clipboard text
 std::string GetClipboardText() {
     if (!OpenClipboard(nullptr)) return "";
 
@@ -63,6 +62,26 @@ std::string GetClipboardText() {
     CloseClipboard();
 
     return text;
+}
+
+void SetClipboardText(const std::string& text) {
+    if (OpenClipboard(nullptr)) {
+        EmptyClipboard();
+        HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, (text.size() + 1) * sizeof(wchar_t));
+        if (hMem) {
+            wchar_t* pMem = (wchar_t*)GlobalLock(hMem);
+            if (pMem) {
+                std::wstring wText = NarrowStringToWide(text);
+                wcscpy_s(pMem, wText.size() + 1, wText.c_str());
+                GlobalUnlock(hMem);
+                SetClipboardData(CF_UNICODETEXT, hMem);
+            }
+            else {
+                GlobalFree(hMem);
+            }
+        }
+        CloseClipboard();
+    }
 }
 
 void ClearClipboard() {
@@ -190,6 +209,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             if (bHadVirus) {
                 bClipboardContentSuspicious = false;
                 ClearClipboard();
+                SetClipboardText("ClipShield: Dangerous web content was removed from the clipboard.");
             }
         }
         break;
