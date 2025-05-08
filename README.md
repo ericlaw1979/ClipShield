@@ -7,4 +7,5 @@ I wrote a blog post about [vibe-coding this utility with Google Gemini](https://
 
 Note: This is more of a proof-of-concept than real tool.
 
-![image](https://github.com/user-attachments/assets/89a8c061-a929-483a-9ee4-b02514873896)
+![image](https://github.com/user-attachments/assets/b2e8f031-eb8f-4862-9b61-afe80f987c6c)
+
