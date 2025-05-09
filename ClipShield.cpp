@@ -12,9 +12,12 @@
 UINT chromiumFormat = RegisterClipboardFormat(L"Chromium internal source URL");
 UINT mozillaFormat = RegisterClipboardFormat(L"text/x-moz-url-priv");
 UINT ieFormat = RegisterClipboardFormat(L"msSourceUrl");
+#define IDI_CLIPSHIELD 107
+
 std::chrono::system_clock::time_point lastClipboardUpdate = std::chrono::system_clock::now();
 HHOOK hKeyboardHook = nullptr;
 bool bClipboardContentSuspicious = false;
+HWND wndMain;
 
 HAMSICONTEXT hAmsiContext = nullptr;
 HAMSISESSION hAmsiSession = nullptr;
@@ -123,6 +126,8 @@ std::string GetAnySourceURL() {
 }
 
 void ShowMessageBoxOnThread(HWND hwnd, std::string message) {
+    // ISSUE: MB_SYSTEMMODAL dialog boxes will show an icon in the title bar. But it's the wrong one!
+    // TODO: Should we not pass the hwnd because it'll make the window show up on the wrong monitor (we want to show on the active monitor).
     MessageBoxA(hwnd, message.c_str(), "DANGER!", MB_OK | MB_SYSTEMMODAL | MB_SETFOREGROUND | MB_ICONWARNING);
 }
 
@@ -138,7 +143,7 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
                     if (diff.count() <= 30) {
                         std::string alertMessage = "Pasting web content into the Run dialog is dangerous and could "
                                                    "result in attackers taking over your computer. Use extreme caution.";
-                        std::thread(ShowMessageBoxOnThread, nullptr, alertMessage).detach();
+                        std::thread(ShowMessageBoxOnThread, wndMain, alertMessage).detach();
                     }
                 }
             }
@@ -161,7 +166,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         std::string lowerClipboardText = toLower(clipboardText);
 
         // TODO: Add your first filter strings here IN LOWERCASE!
-        std::vector<std::string> searchStrings = { "powershell", "mshta", "cmd" };
+        std::vector<std::string> searchStrings = { "powershell", "mshta", "cmd", "msiexec"};
 
         bool bHadVirus = false;
 
@@ -242,15 +247,36 @@ int WINAPI WinMain(
     wc.lpfnWndProc = WndProc;
     wc.hInstance = hInstance;
     wc.lpszClassName = CLASS_NAME;
-
+    wc.hIcon = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_CLIPSHIELD));
     RegisterClass(&wc);
 
-    HWND hwnd = CreateWindowEx(0, CLASS_NAME, L"ClipShield Listener", WS_OVERLAPPEDWINDOW,
+    wndMain = CreateWindowEx(0, CLASS_NAME, L"ClipShield Listener", WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT, 320, 240, nullptr, nullptr, hInstance, nullptr);
-    if (hwnd == nullptr) {
+    if (wndMain == nullptr) {
+        OutputDebugStringA("ClipShield: Failed to create the hidden window.");
         CloseHandle(hSingleInstanceMutex);
         return -1;
     }
+
+    // Debug Only
+    // ShowWindow(wndMain, SW_SHOWDEFAULT);
+    /* I had hoped that setting the icon this way would fix the sys-menu icon on the MessageBox, but it does not.
+    HICON hIcon = static_cast<HICON>(LoadImage(
+        GetModuleHandle(NULL), // Instance handle (use GetModuleHandle(NULL) for the current module)
+        MAKEINTRESOURCE(IDI_CLIPSHIELD), // Resource identifier (replace IDI_CLIPSHIELD with your icon's ID)
+        IMAGE_ICON,           // Type of image to load
+        0,                    // Desired width (0 for default)
+        0,                    // Desired height (0 for default)
+        LR_DEFAULTSIZE        // Flags (use default size)
+    ));
+
+    if (hIcon) {
+        // Set the large icon
+        SendMessage(wndMain, WM_SETICON, ICON_BIG, (LPARAM)hIcon);
+
+        // Optionally, set the small icon
+         SendMessage(wndMain, WM_SETICON, ICON_SMALL, (LPARAM)hIcon);
+    }*/
 
     hKeyboardHook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardProc, hInstance, 0);
     if (hKeyboardHook == nullptr) {
@@ -276,7 +302,7 @@ int WINAPI WinMain(
     }
 
     // Register for notification of clipboard changes.
-    AddClipboardFormatListener(hwnd);
+    AddClipboardFormatListener(wndMain);
 
     // Message loop
     MSG msg = {};
@@ -285,7 +311,7 @@ int WINAPI WinMain(
         DispatchMessage(&msg);
     }
 
-    RemoveClipboardFormatListener(hwnd);
+    RemoveClipboardFormatListener(wndMain);
 
     if (hKeyboardHook != nullptr) UnhookWindowsHookEx(hKeyboardHook);
 
